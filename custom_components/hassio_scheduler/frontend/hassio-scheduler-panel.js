@@ -139,6 +139,7 @@ function emptySchedule() {
     enabled: true,
     start_date: null,
     end_date: null,
+    skip_dates: [],
     timeslots: [emptyTimeslot()],
   };
 }
@@ -271,6 +272,7 @@ class HassioSchedulerPanel extends HTMLElement {
     this._paintProgramId = null;
     this._heatingSaveState = "idle";
     this._heatingSaveTimer = null;
+    this._paused = false;
     this._activePopover = null;
     this._onGlobalPointerUp = () => this._endPaint();
     this._onDocClickClosePopover = (e) => {
@@ -305,6 +307,7 @@ class HassioSchedulerPanel extends HTMLElement {
       this._refreshTimer = setInterval(() => {
         this._loadSchedules();
         this._loadHeatingPrograms();
+        this._loadGlobalState();
       }, REFRESH_INTERVAL_MS);
     }
     window.addEventListener("pointerup", this._onGlobalPointerUp);
@@ -321,7 +324,18 @@ class HassioSchedulerPanel extends HTMLElement {
   async _init() {
     this._injectBaseStyles();
     this._renderShell();
-    await Promise.all([this._loadSchedules(), this._loadHeatingPrograms()]);
+    await Promise.all([this._loadSchedules(), this._loadHeatingPrograms(), this._loadGlobalState()]);
+  }
+
+  async _loadGlobalState() {
+    if (!this._hass) return;
+    try {
+      const resp = await this._hass.callWS({ type: "hassio_scheduler/get_global_state" });
+      this._paused = !!resp.paused;
+    } catch (err) {
+      console.error("Scheduler: failed to load global state", err); // eslint-disable-line no-console
+    }
+    this._updatePauseUI();
   }
 
   async _loadSchedules() {
@@ -372,6 +386,14 @@ class HassioSchedulerPanel extends HTMLElement {
           <span>Scheduler</span>
         </div>
         <nav class="ha-tabs" id="tabs"></nav>
+        <div class="toolbar-spacer"></div>
+        <button class="icon-btn" id="pause-btn" title="Pause everything"><ha-icon icon="mdi:pause-circle-outline"></ha-icon></button>
+        <button class="icon-btn" id="menu-btn" title="More"><ha-icon icon="mdi:dots-vertical"></ha-icon></button>
+      </div>
+      <div class="pause-banner" id="pause-banner" style="display:none">
+        <ha-icon icon="mdi:pause-circle"></ha-icon>
+        <span>Scheduler is paused — nothing will run until you resume it.</span>
+        <button class="btn btn-flat" id="resume-btn">Resume</button>
       </div>
       <div class="subheader">
         <div class="toolbar-nav" id="nav"></div>
@@ -384,6 +406,125 @@ class HassioSchedulerPanel extends HTMLElement {
     this._contentEl = root.querySelector("#content");
     this._renderTabs(root.querySelector("#tabs"));
     this._renderShellSection();
+    root.querySelector("#pause-btn").addEventListener("click", () => this._togglePause());
+    root.querySelector("#resume-btn").addEventListener("click", () => this._setPaused(false));
+    root.querySelector("#menu-btn").addEventListener("click", (e) => this._openMainMenu(e.currentTarget));
+    this._updatePauseUI();
+  }
+
+  _updatePauseUI() {
+    const btn = this.shadowRoot.querySelector("#pause-btn");
+    const banner = this.shadowRoot.querySelector("#pause-banner");
+    if (!btn || !banner) return;
+    btn.innerHTML = this._paused
+      ? `<ha-icon icon="mdi:play-circle"></ha-icon>`
+      : `<ha-icon icon="mdi:pause-circle-outline"></ha-icon>`;
+    btn.title = this._paused ? "Resume everything" : "Pause everything";
+    banner.style.display = this._paused ? "flex" : "none";
+  }
+
+  async _togglePause() {
+    if (!this._paused && !confirm("Pause Scheduler? No schedules or heating programs will run until you resume.")) {
+      return;
+    }
+    await this._setPaused(!this._paused);
+  }
+
+  async _setPaused(paused) {
+    await this._hass.callWS({ type: "hassio_scheduler/set_paused", paused });
+    this._paused = paused;
+    this._updatePauseUI();
+  }
+
+  _openMainMenu(anchorEl) {
+    this._openPopover(anchorEl, (pop) => {
+      pop.innerHTML = `
+        <button class="popover-item" data-a="export"><ha-icon icon="mdi:download"></ha-icon> Export configuration</button>
+        <button class="popover-item" data-a="import"><ha-icon icon="mdi:upload"></ha-icon> Import configuration</button>
+      `;
+      pop.querySelector('[data-a="export"]').addEventListener("click", () => {
+        this._closePopover();
+        this._exportConfig();
+      });
+      pop.querySelector('[data-a="import"]').addEventListener("click", () => {
+        this._closePopover();
+        this._importConfig();
+      });
+    });
+  }
+
+  _exportConfig() {
+    const data = {
+      hassio_scheduler_backup: true,
+      version: 1,
+      exported_at: new Date().toISOString(),
+      schedules: this._schedules.map((s) => this._scheduleUpdatePayload(s)),
+      heating_programs: this._heatingPrograms.map((p) => this._heatingUpdatePayload(p)),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scheduler-backup-${toLocalISODate(new Date())}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  _importConfig() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      let data;
+      try {
+        data = JSON.parse(await file.text());
+      } catch (err) {
+        console.error("Scheduler: import failed to parse file", err); // eslint-disable-line no-console
+        alert("Could not read this file - it is not valid JSON.");
+        return;
+      }
+      const schedules = Array.isArray(data.schedules) ? data.schedules : [];
+      const programs = Array.isArray(data.heating_programs) ? data.heating_programs : [];
+      if (!schedules.length && !programs.length) {
+        alert("This file doesn't contain any Scheduler schedules or heating programs.");
+        return;
+      }
+      if (
+        !confirm(
+          `Import ${schedules.length} schedule(s) and ${programs.length} heating program(s)? They will be added as new items alongside anything you already have.`
+        )
+      ) {
+        return;
+      }
+      try {
+        for (const s of schedules) {
+          const payload = { ...s };
+          delete payload.id;
+          delete payload.next_run;
+          delete payload.last_triggered;
+          (payload.timeslots || []).forEach((t) => delete t.id);
+          await this._hass.callWS({ type: "hassio_scheduler/create", schedule: payload });
+        }
+        for (const p of programs) {
+          const payload = { ...p };
+          delete payload.id;
+          delete payload.target_temperature;
+          delete payload.source;
+          delete payload.override;
+          (payload.presets || []).forEach((pr) => delete pr.id);
+          await this._hass.callWS({ type: "hassio_scheduler/heating_create", program: payload });
+        }
+        await Promise.all([this._loadSchedules(), this._loadHeatingPrograms()]);
+        if (this._tab === "schedule" || this._tab === "heating") this._renderMain();
+        alert("Import complete.");
+      } catch (err) {
+        console.error("Scheduler: import failed", err); // eslint-disable-line no-console
+        alert("Something went wrong while importing. Some items may have been created - check the Schedule and Heating tabs.");
+      }
+    });
+    input.click();
   }
 
   _renderTabs(el) {
@@ -661,6 +802,11 @@ class HassioSchedulerPanel extends HTMLElement {
           <span class="slider"></span>
         </label>
         <button class="icon-btn" title="Run now" id="run-${schedule.id}"><ha-icon icon="mdi:play"></ha-icon></button>
+        ${
+          schedule.next_run
+            ? `<button class="icon-btn" title="Skip next run" id="skip-${schedule.id}"><ha-icon icon="mdi:skip-next-outline"></ha-icon></button>`
+            : ""
+        }
         <button class="icon-btn" title="Duplicate" id="dup-${schedule.id}"><ha-icon icon="mdi:content-copy"></ha-icon></button>
         <button class="icon-btn" title="Edit" id="edit-${schedule.id}"><ha-icon icon="mdi:pencil"></ha-icon></button>
         <button class="icon-btn" title="Delete" id="del-${schedule.id}"><ha-icon icon="mdi:delete"></ha-icon></button>
@@ -669,6 +815,8 @@ class HassioSchedulerPanel extends HTMLElement {
         this._setEnabled(schedule.id, e.target.checked)
       );
       row.querySelector(`#run-${schedule.id}`).addEventListener("click", () => this._runNow(schedule.id));
+      const skipBtn = row.querySelector(`#skip-${schedule.id}`);
+      if (skipBtn) skipBtn.addEventListener("click", () => this._skipNextRun(schedule));
       row.querySelector(`#dup-${schedule.id}`).addEventListener("click", () => this._duplicate(schedule.id));
       row.querySelector(`#edit-${schedule.id}`).addEventListener("click", () => this._openEditor(schedule.id));
       row.querySelector(`#del-${schedule.id}`).addEventListener("click", () => this._deleteSchedule(schedule.id));
@@ -696,6 +844,15 @@ class HassioSchedulerPanel extends HTMLElement {
     const schedule = this._schedules.find((s) => s.id === id);
     if (!confirm(`Delete "${schedule ? schedule.name : "this schedule"}"? This cannot be undone.`)) return;
     await this._hass.callWS({ type: "hassio_scheduler/delete", schedule_id: id });
+    await this._loadSchedules();
+  }
+
+  async _skipNextRun(schedule) {
+    if (!schedule.next_run) return;
+    const dateStr = schedule.next_run.slice(0, 10);
+    const payload = this._scheduleUpdatePayload(schedule);
+    payload.skip_dates = Array.from(new Set([...(payload.skip_dates || []), dateStr]));
+    await this._hass.callWS({ type: "hassio_scheduler/update", schedule_id: schedule.id, schedule: payload });
     await this._loadSchedules();
   }
 
@@ -787,6 +944,16 @@ class HassioSchedulerPanel extends HTMLElement {
         <div class="field field-grow" id="f-start-date-wrap"></div>
         <div class="field field-grow" id="f-end-date-wrap"></div>
       </div>
+      <div class="field-row">
+        <div class="field field-grow">
+          <label>Skip dates (holidays, vacations, etc.)</label>
+          <div class="skip-dates-chips" id="skip-dates-chips"></div>
+          <div class="skip-dates-add">
+            <input type="date" id="skip-date-input" class="skip-date-input"/>
+            <button class="btn btn-flat" id="add-skip-date">+ Add</button>
+          </div>
+        </div>
+      </div>
       <hr/>
       <div class="section-title">Timeslots</div>
       <div id="timeslots"></div>
@@ -814,6 +981,28 @@ class HassioSchedulerPanel extends HTMLElement {
       value: s.end_date,
       label: "Active until (optional)",
       onChange: (v) => (s.end_date = v),
+    });
+
+    const renderSkipChips = () => {
+      const chipsEl = body.querySelector("#skip-dates-chips");
+      const dates = (s.skip_dates || []).slice().sort();
+      chipsEl.innerHTML = dates.length
+        ? dates.map((d) => `<span class="skip-chip">${d}<button class="skip-chip-x" data-date="${d}">×</button></span>`).join("")
+        : `<span class="skip-dates-empty">No skip dates</span>`;
+      chipsEl.querySelectorAll(".skip-chip-x").forEach((btn) =>
+        btn.addEventListener("click", () => {
+          s.skip_dates = (s.skip_dates || []).filter((d) => d !== btn.dataset.date);
+          renderSkipChips();
+        })
+      );
+    };
+    renderSkipChips();
+    body.querySelector("#add-skip-date").addEventListener("click", () => {
+      const input = body.querySelector("#skip-date-input");
+      if (!input.value) return;
+      s.skip_dates = Array.from(new Set([...(s.skip_dates || []), input.value]));
+      input.value = "";
+      renderSkipChips();
     });
 
     const timeslotsEl = body.querySelector("#timeslots");
@@ -857,18 +1046,36 @@ class HassioSchedulerPanel extends HTMLElement {
     const header = document.createElement("div");
     header.className = "timeslot-header";
     header.innerHTML = `<span>Timeslot ${idx + 1}</span>`;
-    const delBtn = document.createElement("button");
-    delBtn.className = "icon-btn";
-    delBtn.innerHTML = `<ha-icon icon="mdi:delete"></ha-icon>`;
-    delBtn.addEventListener("click", () => {
-      this._editing.timeslots.splice(idx, 1);
+    const headerActions = document.createElement("div");
+    headerActions.className = "timeslot-header-actions";
+    const rerenderTimeslotList = () => {
       const timeslotsEl = this.shadowRoot.querySelector("#timeslots");
       if (timeslotsEl) {
         timeslotsEl.innerHTML = "";
         this._editing.timeslots.forEach((sl, i) => timeslotsEl.appendChild(this._buildTimeslotCard(sl, i)));
       }
+    };
+    const dupBtn = document.createElement("button");
+    dupBtn.className = "icon-btn";
+    dupBtn.title = "Duplicate this timeslot";
+    dupBtn.innerHTML = `<ha-icon icon="mdi:content-copy"></ha-icon>`;
+    dupBtn.addEventListener("click", () => {
+      const clone = JSON.parse(JSON.stringify(slot));
+      clone.id = uuid();
+      this._editing.timeslots.splice(idx + 1, 0, clone);
+      rerenderTimeslotList();
     });
-    header.appendChild(delBtn);
+    headerActions.appendChild(dupBtn);
+    const delBtn = document.createElement("button");
+    delBtn.className = "icon-btn";
+    delBtn.title = "Delete this timeslot";
+    delBtn.innerHTML = `<ha-icon icon="mdi:delete"></ha-icon>`;
+    delBtn.addEventListener("click", () => {
+      this._editing.timeslots.splice(idx, 1);
+      rerenderTimeslotList();
+    });
+    headerActions.appendChild(delBtn);
+    header.appendChild(headerActions);
     card.appendChild(header);
 
     const recurrenceRow = document.createElement("div");
@@ -1034,21 +1241,26 @@ class HassioSchedulerPanel extends HTMLElement {
     return wrap;
   }
 
+  _scheduleUpdatePayload(s) {
+    return {
+      name: (s.name || "").trim(),
+      icon: s.icon,
+      color: s.color,
+      enabled: s.enabled,
+      start_date: s.start_date || null,
+      end_date: s.end_date || null,
+      skip_dates: s.skip_dates || [],
+      timeslots: s.timeslots,
+    };
+  }
+
   async _saveEditor() {
     const s = this._editing;
     if (!s.name || !s.name.trim()) {
       alert("Please give this schedule a name.");
       return;
     }
-    const payload = {
-      name: s.name.trim(),
-      icon: s.icon,
-      color: s.color,
-      enabled: s.enabled,
-      start_date: s.start_date || null,
-      end_date: s.end_date || null,
-      timeslots: s.timeslots,
-    };
+    const payload = this._scheduleUpdatePayload(s);
     if (this._editingId) {
       await this._hass.callWS({ type: "hassio_scheduler/update", schedule_id: this._editingId, schedule: payload });
     } else {
@@ -1140,21 +1352,25 @@ class HassioSchedulerPanel extends HTMLElement {
     }
   }
 
+  _heatingUpdatePayload(p) {
+    return {
+      name: p.name,
+      icon: p.icon,
+      color: p.color,
+      enabled: p.enabled,
+      climate_entities: p.climate_entities || [],
+      hvac_mode: p.hvac_mode || null,
+      presets: p.presets,
+      default_preset_id: p.default_preset_id,
+      grid: p.grid || {},
+    };
+  }
+
   async _saveHeatingGrid(programId, grid) {
     const program = this._heatingPrograms.find((p) => p.id === programId);
     if (!program) return;
     this._setHeatingSaveState("saving");
-    const payload = {
-      name: program.name,
-      icon: program.icon,
-      color: program.color,
-      enabled: program.enabled,
-      climate_entities: program.climate_entities,
-      hvac_mode: program.hvac_mode,
-      presets: program.presets,
-      default_preset_id: program.default_preset_id,
-      grid,
-    };
+    const payload = { ...this._heatingUpdatePayload(program), grid };
     await this._hass.callWS({ type: "hassio_scheduler/heating_update", program_id: programId, program: payload });
     this._setHeatingSaveState("saved");
     await this._loadHeatingPrograms();
@@ -1775,7 +1991,7 @@ class HassioSchedulerPanel extends HTMLElement {
     this._mountSelector(body.querySelector("#f-hvac-wrap"), {
       selector: {
         select: {
-          mode: "dropdown",
+          mode: "list",
           options: [
             { value: "", label: "Don't change HVAC mode" },
             { value: "heat", label: "Heat" },
@@ -1790,7 +2006,7 @@ class HassioSchedulerPanel extends HTMLElement {
     });
     this._mountSelector(body.querySelector("#f-default-wrap"), {
       selector: {
-        select: { mode: "dropdown", options: p.presets.map((pr) => ({ value: pr.id, label: pr.name })) },
+        select: { mode: "list", options: p.presets.map((pr) => ({ value: pr.id, label: pr.name })) },
       },
       value: p.default_preset_id,
       label: "Default preset (used for unpainted time)",
@@ -1840,17 +2056,8 @@ class HassioSchedulerPanel extends HTMLElement {
       alert("Add at least one preset.");
       return;
     }
-    const payload = {
-      name: p.name.trim(),
-      icon: p.icon,
-      color: p.color,
-      enabled: p.enabled,
-      climate_entities: p.climate_entities || [],
-      hvac_mode: p.hvac_mode || null,
-      presets: p.presets,
-      default_preset_id: p.default_preset_id,
-      grid: p.grid || {},
-    };
+    p.name = p.name.trim();
+    const payload = this._heatingUpdatePayload(p);
     if (this._heatingEditingId) {
       await this._hass.callWS({
         type: "hassio_scheduler/heating_update",
@@ -1886,6 +2093,11 @@ const STYLES = `
   .ha-tab:hover { opacity:1; }
   .ha-tab-active { opacity:1; }
   .ha-tab-indicator { position:absolute; bottom:0; left:0; height:3px; background:#fff; border-radius:3px 3px 0 0; transition: transform 0.25s cubic-bezier(0.4,0,0.2,1), width 0.25s cubic-bezier(0.4,0,0.2,1); }
+  .toolbar-spacer { flex:1; }
+
+  .pause-banner { display:flex; align-items:center; gap:10px; padding:10px 16px; background: rgba(255,152,0,0.18); color: var(--primary-text-color); font-size:13px; border-bottom:1px solid var(--divider-color, #e0e0e0); }
+  .pause-banner ha-icon { color:#ff9800; }
+  .pause-banner button { margin-left:auto; }
 
   .subheader { display:flex; align-items:center; justify-content:flex-end; gap:16px; padding:8px 16px; background: var(--card-background-color, var(--primary-background-color)); border-bottom:1px solid var(--divider-color, #e0e0e0); flex-wrap:wrap; }
   .toolbar-nav { display:flex; align-items:center; gap:4px; flex:1; min-width:200px; }
@@ -1961,8 +2173,17 @@ const STYLES = `
 
   .timeslot-card { border:1px solid var(--divider-color, #e0e0e0); border-radius:8px; padding:12px; margin-bottom:12px; }
   .timeslot-header { display:flex; align-items:center; justify-content:space-between; font-weight:500; margin-bottom:8px; }
+  .timeslot-header-actions { display:flex; gap:2px; }
   .timespec { border-left:2px solid var(--divider-color, #e0e0e0); padding-left:8px; margin-bottom:8px; }
   .timespec-title { font-size:12px; opacity:0.7; margin-bottom:4px; }
+
+  .skip-dates-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; min-height:24px; }
+  .skip-chip { display:inline-flex; align-items:center; gap:4px; background: var(--secondary-background-color, rgba(127,127,127,0.12)); border-radius:12px; padding:3px 6px 3px 10px; font-size:12px; }
+  .skip-chip-x { background:transparent; border:none; color:inherit; cursor:pointer; font-size:14px; line-height:1; padding:2px; opacity:0.6; }
+  .skip-chip-x:hover { opacity:1; }
+  .skip-dates-empty { font-size:12px; opacity:0.5; padding:3px 0; }
+  .skip-dates-add { display:flex; gap:8px; align-items:center; }
+  .skip-date-input { font-size:14px; padding:8px; border-radius:4px; border:1px solid var(--divider-color, #ccc); background: var(--primary-background-color); color:inherit; }
 
   /* ---------------------------------------------------------- popovers */
   .popover { position:absolute; z-index:20; background: var(--card-background-color, #fff); color: var(--primary-text-color); border-radius:8px; box-shadow: var(--ha-card-box-shadow, 0 4px 16px rgba(0,0,0,0.3)); padding:12px; width:260px; box-sizing:border-box; border:1px solid var(--divider-color, #e0e0e0); }
@@ -1971,7 +2192,7 @@ const STYLES = `
   .popover-input { flex:1; font-size:16px; padding:8px; border-radius:4px; border:1px solid var(--divider-color, #ccc); background: var(--primary-background-color); color:inherit; }
   .popover-chips { flex-wrap:wrap; }
   .popover-confirm { width:100%; }
-  .popover-item { display:block; width:100%; text-align:left; background:transparent; border:none; color:inherit; padding:8px; border-radius:4px; cursor:pointer; font-size:13px; }
+  .popover-item { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:none; color:inherit; padding:8px; border-radius:4px; cursor:pointer; font-size:13px; }
   .popover-item:hover { background: rgba(127,127,127,0.12); }
   .popover-danger { color: var(--error-color, #db4437); }
 

@@ -26,6 +26,7 @@ from homeassistant.helpers.script import Script
 import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN, EVENT_SKIPPED, EVENT_TRIGGERED, SIGNAL_SCHEDULES_UPDATED, WEEKDAYS
+from .global_state import GlobalStateStore
 from .store import ScheduleStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,6 +72,8 @@ def _slot_active_on(schedule: dict[str, Any], slot: dict[str, Any], on_date: dat
         return False
     if end_date and on_date > date.fromisoformat(end_date):
         return False
+    if on_date.isoformat() in (schedule.get("skip_dates") or []):
+        return False
     if slot.get("recurrence") == "once":
         return slot.get("date") == on_date.isoformat()
     weekday = WEEKDAYS[on_date.weekday()]
@@ -95,9 +98,10 @@ def _candidate_occurrence(
 class SchedulerEngine:
     """Evaluates and fires schedules."""
 
-    def __init__(self, hass: HomeAssistant, store: ScheduleStore) -> None:
+    def __init__(self, hass: HomeAssistant, store: ScheduleStore, global_store: GlobalStateStore) -> None:
         self.hass = hass
         self.store = store
+        self.global_store = global_store
         self.last_triggered: dict[str, str] = {}
         self._unsub_tick = None
         self._fired_this_minute: set[tuple[str, str, str]] = set()
@@ -113,6 +117,8 @@ class SchedulerEngine:
             self._unsub_tick = None
 
     async def _async_tick(self, _now_utc: datetime) -> None:
+        if self.global_store.paused:
+            return
         now_local = dt_util.now()
         minute_key = now_local.strftime("%Y-%m-%dT%H:%M")
         if minute_key != self._fired_minute_key:
@@ -212,7 +218,7 @@ class SchedulerEngine:
 
     def compute_next_run(self, schedule: dict[str, Any], horizon_days: int = 14) -> str | None:
         """Best-effort next start time for display purposes."""
-        if not schedule.get("enabled"):
+        if not schedule.get("enabled") or self.global_store.paused:
             return None
         now_local = dt_util.now()
         best: datetime | None = None

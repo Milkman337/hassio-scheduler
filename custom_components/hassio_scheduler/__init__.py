@@ -34,12 +34,16 @@ from .const import (
     SERVICE_HEATING_BOOST,
     SERVICE_HEATING_CLEAR_OVERRIDE,
     SERVICE_HEATING_SET_OVERRIDE,
+    SERVICE_PAUSE,
     SERVICE_REMOVE_SCHEDULE,
+    SERVICE_RESUME,
     SERVICE_RUN_NOW,
     VERSION,
 )
 from .coordinator import SchedulerCoordinator
 from .engine import SchedulerEngine
+from .global_state import GlobalStateStore
+from .global_websocket_api import async_register_global_websocket_commands
 from .heating import HeatingEngine
 from .heating_coordinator import HeatingCoordinator
 from .heating_store import HeatingStore
@@ -74,22 +78,27 @@ HEATING_SERVICES = (
     SERVICE_HEATING_SET_OVERRIDE,
     SERVICE_HEATING_CLEAR_OVERRIDE,
 )
+GLOBAL_SERVICES = (SERVICE_PAUSE, SERVICE_RESUME)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Scheduler from a config entry."""
+    global_store = GlobalStateStore(hass)
+    await global_store.async_load()
+
     store = ScheduleStore(hass)
     await store.async_load()
-    engine = SchedulerEngine(hass, store)
+    engine = SchedulerEngine(hass, store, global_store)
     coordinator = SchedulerCoordinator(hass, store, engine)
 
     heating_store = HeatingStore(hass)
     await heating_store.async_load()
-    heating_engine = HeatingEngine(hass, heating_store)
+    heating_engine = HeatingEngine(hass, heating_store, global_store)
     heating_coordinator = HeatingCoordinator(hass, heating_store, heating_engine)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN] = {
+        "global_store": global_store,
         "store": store,
         "engine": engine,
         "coordinator": coordinator,
@@ -105,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async_register_websocket_commands(hass)
     async_register_heating_websocket_commands(hass)
+    async_register_global_websocket_commands(hass)
     await _async_register_panel(hass)
     _async_register_services(hass)
 
@@ -134,6 +144,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for service in (SERVICE_RUN_NOW, SERVICE_ENABLE, SERVICE_DISABLE, SERVICE_REMOVE_SCHEDULE):
             hass.services.async_remove(DOMAIN, service)
         for service in HEATING_SERVICES:
+            hass.services.async_remove(DOMAIN, service)
+        for service in GLOBAL_SERVICES:
             hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
@@ -180,6 +192,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
     coordinator: SchedulerCoordinator = hass.data[DOMAIN]["coordinator"]
     heating_engine: HeatingEngine = hass.data[DOMAIN]["heating_engine"]
     heating_coordinator: HeatingCoordinator = hass.data[DOMAIN]["heating_coordinator"]
+    global_store: GlobalStateStore = hass.data[DOMAIN]["global_store"]
 
     async def _handle_run_now(call: ServiceCall) -> None:
         await engine.async_run_now(call.data["schedule_id"], call.data.get("timeslot_id"))
@@ -209,6 +222,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
     async def _handle_heating_clear_override(call: ServiceCall) -> None:
         await heating_engine.async_clear_override(call.data["program_id"])
         await heating_coordinator.async_request_refresh()
+
+    async def _handle_pause(call: ServiceCall) -> None:
+        await global_store.async_set_paused(True)
+
+    async def _handle_resume(call: ServiceCall) -> None:
+        await global_store.async_set_paused(False)
 
     if not hass.services.has_service(DOMAIN, SERVICE_RUN_NOW):
         hass.services.async_register(
@@ -240,3 +259,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             _handle_heating_clear_override,
             schema=SERVICE_HEATING_PROGRAM_ID_SCHEMA,
         )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_PAUSE):
+        hass.services.async_register(DOMAIN, SERVICE_PAUSE, _handle_pause, schema=vol.Schema({}))
+        hass.services.async_register(DOMAIN, SERVICE_RESUME, _handle_resume, schema=vol.Schema({}))

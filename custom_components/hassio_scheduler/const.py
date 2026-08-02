@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "hassio_scheduler"
 NAME = "Scheduler"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
@@ -13,6 +13,7 @@ PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 STORAGE_VERSION = 1
 STORAGE_KEY_SCHEDULES = f"{DOMAIN}.schedules"
 STORAGE_KEY_HEATING = f"{DOMAIN}.heating_programs"
+STORAGE_KEY_GLOBAL = f"{DOMAIN}.global_state"
 
 # Panel
 PANEL_URL_PATH = DOMAIN
@@ -24,6 +25,7 @@ FRONTEND_SCRIPT_URL = f"/hassio_scheduler_panel/{PANEL_NAME}.js"
 # Dispatcher signals
 SIGNAL_SCHEDULES_UPDATED = f"{DOMAIN}_schedules_updated"
 SIGNAL_HEATING_UPDATED = f"{DOMAIN}_heating_updated"
+SIGNAL_GLOBAL_UPDATED = f"{DOMAIN}_global_updated"
 
 # Events fired on the HA event bus
 EVENT_TRIGGERED = f"{DOMAIN}_triggered"
@@ -39,6 +41,8 @@ SERVICE_REMOVE_SCHEDULE = "remove_schedule"
 SERVICE_HEATING_BOOST = "heating_boost"
 SERVICE_HEATING_SET_OVERRIDE = "heating_set_override"
 SERVICE_HEATING_CLEAR_OVERRIDE = "heating_clear_override"
+SERVICE_PAUSE = "pause"
+SERVICE_RESUME = "resume"
 
 ATTR_SCHEDULE_ID = "schedule_id"
 ATTR_TIMESLOT_ID = "timeslot_id"

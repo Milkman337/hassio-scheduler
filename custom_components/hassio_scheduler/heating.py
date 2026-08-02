@@ -21,6 +21,7 @@ from homeassistant.helpers.event import async_track_time_change
 import homeassistant.util.dt as dt_util
 
 from .const import EVENT_HEATING_APPLIED, SIGNAL_HEATING_UPDATED, WEEKDAYS
+from .global_state import GlobalStateStore
 from .heating_store import HeatingStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -84,9 +85,10 @@ def resolve_target_temperature(program: dict[str, Any], now_local: datetime) -> 
 class HeatingEngine:
     """Evaluates and applies heating programs."""
 
-    def __init__(self, hass: HomeAssistant, store: HeatingStore) -> None:
+    def __init__(self, hass: HomeAssistant, store: HeatingStore, global_store: GlobalStateStore) -> None:
         self.hass = hass
         self.store = store
+        self.global_store = global_store
         self._last_applied: dict[str, float] = {}
         self._unsub_tick = None
 
@@ -99,6 +101,8 @@ class HeatingEngine:
             self._unsub_tick = None
 
     async def _async_tick(self, _now_utc: datetime) -> None:
+        if self.global_store.paused:
+            return
         now_local = dt_util.now()
         for program in list(self.store.programs.values()):
             if not program.get("enabled"):

@@ -18,7 +18,8 @@ Point-and-click a time slot to create a schedule, or open the editor to build so
 - ↔️ Optional **start + end** time ranges (e.g. "quiet hours 22:00 → 06:00"), including overnight ranges that cross midnight, with separate actions for when the range starts and ends.
 - ⚙️ Actions use the same editor as the built-in Automation UI (`ha-selector` action editor) — call any service, target any entity/device/area, add delays, conditions, choose blocks, etc.
 - 📆 Optional overall **active date window** (start/end date) per schedule, e.g. "only active during December".
-- 🗓️ Run once and auto-disable, run manually with **Run now**, **duplicate**, **enable/disable**, or **delete** any schedule.
+- 🎌 **Skip dates** - exclude specific holidays/exceptions from a schedule without touching its normal days, plus a one-click **Skip next run** button in the list view (e.g. "don't water the garden tomorrow, but keep the rest of the week").
+- 🗓️ Run once and auto-disable, run manually with **Run now**, **duplicate** (whole schedule or a single timeslot), **enable/disable**, or **delete** any schedule.
 
 ### Heating tab
 
@@ -36,6 +37,8 @@ A dedicated tab for the classic "weekly thermostat program" use case, built arou
 ### Platform
 
 - 🧩 Every schedule and heating program becomes native Home Assistant entities - so they're automatable too.
+- ⏸️ A global **"Scheduler active" master switch** (and Pause/Resume buttons in the toolbar) instantly pauses *everything* - every schedule and heating program - without touching each item's individual enabled state, and remembers it across restarts. Perfect for "we're away, stop everything" without having to re-enable 15 schedules afterwards.
+- 💾 **Export / Import** your entire configuration as a single JSON file from the toolbar's **⋮** menu - back it up, move it to another instance, or share it.
 - 🛎️ Fires `hassio_scheduler_triggered` / `hassio_scheduler_skipped` / `hassio_scheduler_heating_applied` events on the event bus.
 - 🎛️ Native Home Assistant look and feel throughout - tabs, dialogs and pickers match the rest of the UI, in both light and dark themes.
 - 💾 Everything is stored locally in Home Assistant's own storage — no cloud, no external dependencies.
@@ -81,6 +84,10 @@ Once added, open **Scheduler** in the sidebar. It has two tabs:
 - Choose a preset from the palette, then click or drag across the weekly grid to paint it in. Use each day header's **⋮** menu to copy a day to weekdays/weekend/everywhere, or clear it.
 - Use **Boost** for a short temporary bump, or **Hold / Away** to override the schedule until you cancel it or until a chosen time.
 
+**Toolbar** (top-right, next to the tabs)
+- The pause icon **pauses or resumes everything at once** - both tabs, no individual items affected.
+- The **⋮** menu lets you **export** your whole configuration to a JSON file, or **import** one back in (added as new schedules/programs alongside what you already have).
+
 ## Services
 
 | Service | Description |
@@ -92,6 +99,8 @@ Once added, open **Scheduler** in the sidebar. It has two tabs:
 | `hassio_scheduler.heating_boost` | Temporarily hold a temperature on a heating program for N minutes, then auto-revert. |
 | `hassio_scheduler.heating_set_override` | Hold a temperature on a heating program indefinitely, or until a given time. |
 | `hassio_scheduler.heating_clear_override` | Clear an active boost/hold override, returning to the schedule. |
+| `hassio_scheduler.pause` | Pause every schedule and heating program at once. |
+| `hassio_scheduler.resume` | Resume normal operation after a pause. |
 
 ## Events
 

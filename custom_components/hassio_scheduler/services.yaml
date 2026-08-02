@@ -117,3 +117,11 @@ heating_clear_override:
       required: true
       selector:
         text:
+
+pause:
+  name: Pause
+  description: Pause every schedule and heating program at once, without changing their individual enabled states.
+
+resume:
+  name: Resume
+  description: Resume normal operation after a pause.

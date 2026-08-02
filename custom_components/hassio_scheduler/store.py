@@ -10,6 +10,7 @@ Schedule data model (stored as plain dicts, JSON-serialisable):
   "enabled": True,
   "start_date": "2026-01-01" | None,   # optional overall active window
   "end_date": "2026-12-31" | None,
+  "skip_dates": ["2026-12-25"],        # dates this schedule never fires on
   "timeslots": [
     {
       "id": "uuid4",
@@ -115,6 +116,7 @@ def _normalize_schedule(data: dict[str, Any]) -> dict[str, Any]:
         "enabled": bool(data.get("enabled", True)),
         "start_date": data.get("start_date"),
         "end_date": data.get("end_date"),
+        "skip_dates": sorted(set(data.get("skip_dates") or [])),
         "timeslots": [],
     }
     for slot in data.get("timeslots", []):
