@@ -3,7 +3,9 @@
 A fully-featured, UI-driven scheduler for Home Assistant. Schedules are
 managed through a dedicated sidebar panel (day/week calendar views) and can
 run any Home Assistant action/script sequence at a specific time of day,
-relative to sunrise/sunset, on chosen weekdays or on a single date.
+relative to sunrise/sunset, on chosen weekdays or on a single date. A
+dedicated Heating tab drives `climate` entities from a paintable weekly
+temperature grid, with boost/hold overrides.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
+import homeassistant.util.dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -28,12 +31,19 @@ from .const import (
     PLATFORMS,
     SERVICE_DISABLE,
     SERVICE_ENABLE,
+    SERVICE_HEATING_BOOST,
+    SERVICE_HEATING_CLEAR_OVERRIDE,
+    SERVICE_HEATING_SET_OVERRIDE,
     SERVICE_REMOVE_SCHEDULE,
     SERVICE_RUN_NOW,
     VERSION,
 )
 from .coordinator import SchedulerCoordinator
 from .engine import SchedulerEngine
+from .heating import HeatingEngine
+from .heating_coordinator import HeatingCoordinator
+from .heating_store import HeatingStore
+from .heating_websocket_api import async_register_heating_websocket_commands
 from .store import ScheduleStore
 from .websocket_api import async_register_websocket_commands
 
@@ -43,27 +53,58 @@ SERVICE_SCHEDULE_ID_SCHEMA = vol.Schema({vol.Required("schedule_id"): cv.string}
 SERVICE_RUN_NOW_SCHEMA = vol.Schema(
     {vol.Required("schedule_id"): cv.string, vol.Optional("timeslot_id"): cv.string}
 )
+SERVICE_HEATING_BOOST_SCHEMA = vol.Schema(
+    {
+        vol.Required("program_id"): cv.string,
+        vol.Required("temperature"): vol.Coerce(float),
+        vol.Optional("minutes", default=60): vol.Coerce(int),
+    }
+)
+SERVICE_HEATING_OVERRIDE_SCHEMA = vol.Schema(
+    {
+        vol.Required("program_id"): cv.string,
+        vol.Required("temperature"): vol.Coerce(float),
+        vol.Optional("until"): cv.datetime,
+    }
+)
+SERVICE_HEATING_PROGRAM_ID_SCHEMA = vol.Schema({vol.Required("program_id"): cv.string})
+
+HEATING_SERVICES = (
+    SERVICE_HEATING_BOOST,
+    SERVICE_HEATING_SET_OVERRIDE,
+    SERVICE_HEATING_CLEAR_OVERRIDE,
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Scheduler from a config entry."""
     store = ScheduleStore(hass)
     await store.async_load()
-
     engine = SchedulerEngine(hass, store)
     coordinator = SchedulerCoordinator(hass, store, engine)
+
+    heating_store = HeatingStore(hass)
+    await heating_store.async_load()
+    heating_engine = HeatingEngine(hass, heating_store)
+    heating_coordinator = HeatingCoordinator(hass, heating_store, heating_engine)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN] = {
         "store": store,
         "engine": engine,
         "coordinator": coordinator,
+        "heating_store": heating_store,
+        "heating_engine": heating_engine,
+        "heating_coordinator": heating_coordinator,
     }
 
     await coordinator.async_config_entry_first_refresh()
+    await heating_coordinator.async_config_entry_first_refresh()
     engine.async_start()
+    heating_engine.async_start()
 
     async_register_websocket_commands(hass)
+    async_register_heating_websocket_commands(hass)
     await _async_register_panel(hass)
     _async_register_services(hass)
 
@@ -79,12 +120,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = hass.data.pop(DOMAIN, {})
         engine: SchedulerEngine | None = data.get("engine")
         coordinator: SchedulerCoordinator | None = data.get("coordinator")
+        heating_engine: HeatingEngine | None = data.get("heating_engine")
+        heating_coordinator: HeatingCoordinator | None = data.get("heating_coordinator")
         if engine is not None:
             engine.async_stop()
         if coordinator is not None:
             coordinator.async_unload()
+        if heating_engine is not None:
+            heating_engine.async_stop()
+        if heating_coordinator is not None:
+            heating_coordinator.async_unload()
         async_remove_panel(hass, PANEL_URL_PATH)
         for service in (SERVICE_RUN_NOW, SERVICE_ENABLE, SERVICE_DISABLE, SERVICE_REMOVE_SCHEDULE):
+            hass.services.async_remove(DOMAIN, service)
+        for service in HEATING_SERVICES:
             hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
@@ -129,6 +178,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
     engine: SchedulerEngine = hass.data[DOMAIN]["engine"]
     store: ScheduleStore = hass.data[DOMAIN]["store"]
     coordinator: SchedulerCoordinator = hass.data[DOMAIN]["coordinator"]
+    heating_engine: HeatingEngine = hass.data[DOMAIN]["heating_engine"]
+    heating_coordinator: HeatingCoordinator = hass.data[DOMAIN]["heating_coordinator"]
 
     async def _handle_run_now(call: ServiceCall) -> None:
         await engine.async_run_now(call.data["schedule_id"], call.data.get("timeslot_id"))
@@ -145,6 +196,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
         await store.async_delete(call.data["schedule_id"])
         await coordinator.async_request_refresh()
 
+    async def _handle_heating_boost(call: ServiceCall) -> None:
+        await heating_engine.async_boost(call.data["program_id"], call.data["temperature"], call.data["minutes"])
+        await heating_coordinator.async_request_refresh()
+
+    async def _handle_heating_set_override(call: ServiceCall) -> None:
+        until = call.data.get("until")
+        until_iso = dt_util.as_local(until).isoformat() if until else None
+        await heating_engine.async_set_override(call.data["program_id"], call.data["temperature"], until_iso)
+        await heating_coordinator.async_request_refresh()
+
+    async def _handle_heating_clear_override(call: ServiceCall) -> None:
+        await heating_engine.async_clear_override(call.data["program_id"])
+        await heating_coordinator.async_request_refresh()
+
     if not hass.services.has_service(DOMAIN, SERVICE_RUN_NOW):
         hass.services.async_register(
             DOMAIN, SERVICE_RUN_NOW, _handle_run_now, schema=SERVICE_RUN_NOW_SCHEMA
@@ -157,4 +222,21 @@ def _async_register_services(hass: HomeAssistant) -> None:
         )
         hass.services.async_register(
             DOMAIN, SERVICE_REMOVE_SCHEDULE, _handle_remove, schema=SERVICE_SCHEDULE_ID_SCHEMA
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_HEATING_BOOST):
+        hass.services.async_register(
+            DOMAIN, SERVICE_HEATING_BOOST, _handle_heating_boost, schema=SERVICE_HEATING_BOOST_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_HEATING_SET_OVERRIDE,
+            _handle_heating_set_override,
+            schema=SERVICE_HEATING_OVERRIDE_SCHEMA,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_HEATING_CLEAR_OVERRIDE,
+            _handle_heating_clear_override,
+            schema=SERVICE_HEATING_PROGRAM_ID_SCHEMA,
         )

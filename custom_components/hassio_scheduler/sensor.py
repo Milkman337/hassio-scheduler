@@ -2,8 +2,9 @@
 
 One sensor is created per user-defined schedule (state = next run time), plus
 a single overview sensor showing the soonest upcoming event across all
-schedules. Entities are added/removed dynamically as schedules are created
-or deleted through the panel.
+schedules, and one sensor per heating program (state = its currently
+resolved target temperature). Entities are added/removed dynamically as
+schedules/programs are created or deleted through the panel.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -19,6 +21,7 @@ import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN, NAME
 from .coordinator import SchedulerCoordinator
+from .heating_coordinator import HeatingCoordinator
 
 
 def _device_info() -> DeviceInfo:
@@ -63,6 +66,32 @@ async def async_setup_entry(
 
     _sync()
     coordinator.async_add_listener(_sync)
+
+    heating_coordinator: HeatingCoordinator = hass.data[DOMAIN]["heating_coordinator"]
+    known_heating_ids: set[str] = set()
+    heating_entities: dict[str, HeatingProgramSensor] = {}
+
+    @callback
+    def _sync_heating() -> None:
+        current_ids = set(heating_coordinator.data or {})
+        new_ids = current_ids - known_heating_ids
+        removed_ids = known_heating_ids - current_ids
+
+        if new_ids:
+            new_entities = [HeatingProgramSensor(heating_coordinator, program_id) for program_id in new_ids]
+            for entity in new_entities:
+                heating_entities[entity.program_id] = entity
+            async_add_entities(new_entities)
+            known_heating_ids.update(new_ids)
+
+        for program_id in removed_ids:
+            entity = heating_entities.pop(program_id, None)
+            if entity is not None:
+                hass.async_create_task(entity.async_remove())
+            known_heating_ids.discard(program_id)
+
+    _sync_heating()
+    heating_coordinator.async_add_listener(_sync_heating)
 
 
 class ScheduleSensor(CoordinatorEntity[SchedulerCoordinator], SensorEntity):
@@ -156,4 +185,59 @@ class SchedulerOverviewSensor(CoordinatorEntity[SchedulerCoordinator], SensorEnt
         return {
             "schedule_id": schedule_id,
             "schedule_name": schedule.get("name"),
+        }
+
+
+class HeatingProgramSensor(CoordinatorEntity[HeatingCoordinator], SensorEntity):
+    """Represents a heating program's currently resolved target temperature."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_icon = "mdi:radiator"
+
+    def __init__(self, coordinator: HeatingCoordinator, program_id: str) -> None:
+        super().__init__(coordinator)
+        self.program_id = program_id
+        self._attr_unique_id = f"{DOMAIN}_heating_{program_id}_target"
+        self._attr_device_info = _device_info()
+
+    @property
+    def _entry(self) -> dict[str, Any]:
+        return (self.coordinator.data or {}).get(self.program_id, {})
+
+    @property
+    def available(self) -> bool:
+        return bool(self._entry)
+
+    @property
+    def name(self) -> str:
+        program = self._entry.get("program", {})
+        return program.get("name", "Heating program")
+
+    @property
+    def icon(self) -> str:
+        program = self._entry.get("program", {})
+        return program.get("icon") or "mdi:radiator"
+
+    @property
+    def native_value(self) -> Any:
+        return self._entry.get("target_temperature")
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        units = getattr(self.hass.config, "units", None)
+        return getattr(units, "temperature_unit", UnitOfTemperature.CELSIUS)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        program = self._entry.get("program", {})
+        override = program.get("override")
+        return {
+            "enabled": program.get("enabled", False),
+            "source": self._entry.get("source"),
+            "climate_entities": program.get("climate_entities", []),
+            "override_active": bool(override),
+            "override_until": (override or {}).get("until"),
+            "color": program.get("color"),
         }

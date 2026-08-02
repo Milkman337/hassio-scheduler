@@ -3,11 +3,13 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A fully-featured, UI-driven scheduler for Home Assistant. Manage everything from a dedicated **sidebar panel** with real **Day**, **Week** and **List** calendar views — no YAML required.
+A fully-featured, UI-driven scheduler for Home Assistant. Manage everything from a dedicated **sidebar panel** with real **Day**, **Week** and **List** calendar views, plus a dedicated **Heating** tab with a paintable weekly temperature program — no YAML required.
 
 Point-and-click a time slot to create a schedule, or open the editor to build something as simple as "turn a light on at 18:00" or as advanced as a full multi-step action sequence (delays, conditions, choose/repeat blocks — the exact same engine that powers automations).
 
 ## Features
+
+### Scheduler
 
 - 📅 **Day and Week hour-by-hour calendar views**, plus a filterable/sortable **List** view for management at a glance.
 - 🖱️ Click-to-create: click any hour cell to start a new schedule pre-filled with that day and time.
@@ -17,8 +19,25 @@ Point-and-click a time slot to create a schedule, or open the editor to build so
 - ⚙️ Actions use the same editor as the built-in Automation UI (`ha-selector` action editor) — call any service, target any entity/device/area, add delays, conditions, choose blocks, etc.
 - 📆 Optional overall **active date window** (start/end date) per schedule, e.g. "only active during December".
 - 🗓️ Run once and auto-disable, run manually with **Run now**, **duplicate**, **enable/disable**, or **delete** any schedule.
-- 🧩 Every schedule also becomes native Home Assistant entities: a `sensor` showing its next run time and a `switch` to enable/disable it — so it's automatable too.
-- 🛎️ Fires `hassio_scheduler_triggered` / `hassio_scheduler_skipped` events on the event bus, and exposes `hassio_scheduler.run_now`, `.enable`, `.disable` and `.remove_schedule` services.
+
+### Heating tab
+
+A dedicated tab for the classic "weekly thermostat program" use case, built around one or more `climate` entities:
+
+- 🎨 **Paint your weekly program** on a 7-day × 30-minute grid, Tado/Hive-style: pick a temperature preset as your brush, then click or click-drag across the grid to fill it in. Right-click a cell to clear it instantly.
+- 🌡️ Fully custom **preset palette** per program (name, temperature, color, icon) — or paint a one-off **custom temperature** on any cell without needing a preset.
+- 🧮 Unpainted time visibly falls back to a **default preset** (shown hatched), so the whole week is always covered.
+- 📋 **Copy Monday to weekdays**, copy to the weekend, copy to every day, or clear a day - from a menu on each day header.
+- 🔥 **Boost** a temperature for a set number of minutes (30m/1h/2h/3h/custom), or **Hold/Away** a temperature indefinitely or until a chosen date/time - both auto-revert to the schedule exactly on time, even across a Home Assistant restart.
+- 📡 A live **status banner** shows what's active right now (schedule / boost / hold, with a cancel button), plus a **current vs. target** readout per climate entity with an animated flame while actively heating.
+- 🏠 Drive **multiple climate entities** from a single program, with an optional HVAC mode to apply alongside the temperature.
+- 🧩 Each program also becomes a `sensor` (current target temperature) and a `switch` (enable/disable) - and can be boosted/held from automations too.
+
+### Platform
+
+- 🧩 Every schedule and heating program becomes native Home Assistant entities - so they're automatable too.
+- 🛎️ Fires `hassio_scheduler_triggered` / `hassio_scheduler_skipped` / `hassio_scheduler_heating_applied` events on the event bus.
+- 🎛️ Native Home Assistant look and feel throughout - tabs, dialogs and pickers match the rest of the UI, in both light and dark themes.
 - 💾 Everything is stored locally in Home Assistant's own storage — no cloud, no external dependencies.
 
 ## Installation
@@ -50,11 +69,17 @@ This repository is **not** in the default HACS store, so add it as a custom repo
 
 ## Usage
 
-Once added, open **Scheduler** in the sidebar:
+Once added, open **Scheduler** in the sidebar. It has two tabs:
 
+**Schedule**
 - **Week / Day view** — click any empty hour cell to create a schedule at that day and time; click an existing block to edit it.
 - **List view** — search, toggle, run now, duplicate, edit or delete any schedule; see when each one will next run.
 - In the editor, add one or more **timeslots** to a schedule (e.g. weekdays at 07:00 *and* weekends at 09:00, all under one schedule), each with its own days/date, start (and optional end) time, and actions.
+
+**Heating**
+- Pick or create a heating program from the chip strip at the top, and select which `climate` entities it controls (via the ⚙️ editor).
+- Choose a preset from the palette, then click or drag across the weekly grid to paint it in. Use each day header's **⋮** menu to copy a day to weekdays/weekend/everywhere, or clear it.
+- Use **Boost** for a short temporary bump, or **Hold / Away** to override the schedule until you cancel it or until a chosen time.
 
 ## Services
 
@@ -64,6 +89,9 @@ Once added, open **Scheduler** in the sidebar:
 | `hassio_scheduler.enable` | Enable a schedule. |
 | `hassio_scheduler.disable` | Disable a schedule. |
 | `hassio_scheduler.remove_schedule` | Permanently delete a schedule. |
+| `hassio_scheduler.heating_boost` | Temporarily hold a temperature on a heating program for N minutes, then auto-revert. |
+| `hassio_scheduler.heating_set_override` | Hold a temperature on a heating program indefinitely, or until a given time. |
+| `hassio_scheduler.heating_clear_override` | Clear an active boost/hold override, returning to the schedule. |
 
 ## Events
 
@@ -71,6 +99,7 @@ Once added, open **Scheduler** in the sidebar:
 |---|---|
 | `hassio_scheduler_triggered` | A schedule's actions are about to run (start or end phase). |
 | `hassio_scheduler_skipped` | A schedule fired with no actions configured. |
+| `hassio_scheduler_heating_applied` | A heating program applied a new target temperature to its climate entities. |
 
 ## Contributing
 

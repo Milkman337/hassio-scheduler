@@ -54,6 +54,52 @@
           "description": "The schedule to remove."
         }
       }
+    },
+    "heating_boost": {
+      "name": "Heating boost",
+      "description": "Temporarily hold a temperature on a heating program for a number of minutes, then automatically revert to its schedule.",
+      "fields": {
+        "program_id": {
+          "name": "Heating program",
+          "description": "The heating program to boost."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "The temperature to hold."
+        },
+        "minutes": {
+          "name": "Duration",
+          "description": "How long to hold this temperature, in minutes."
+        }
+      }
+    },
+    "heating_set_override": {
+      "name": "Heating set override",
+      "description": "Hold a temperature on a heating program indefinitely, or until a given time, overriding its schedule.",
+      "fields": {
+        "program_id": {
+          "name": "Heating program",
+          "description": "The heating program to override."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "The temperature to hold."
+        },
+        "until": {
+          "name": "Until",
+          "description": "Optional - revert back to the schedule automatically at this date/time. Leave empty to hold indefinitely."
+        }
+      }
+    },
+    "heating_clear_override": {
+      "name": "Heating clear override",
+      "description": "Clear any active boost/hold override on a heating program, returning it to its schedule.",
+      "fields": {
+        "program_id": {
+          "name": "Heating program",
+          "description": "The heating program to clear the override on."
+        }
+      }
     }
   }
 }

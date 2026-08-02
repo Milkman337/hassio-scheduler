@@ -47,3 +47,73 @@ remove_schedule:
       required: true
       selector:
         text:
+
+heating_boost:
+  name: Heating boost
+  description: Temporarily hold a temperature on a heating program for a number of minutes, then automatically revert to its schedule.
+  fields:
+    program_id:
+      name: Heating program
+      description: The heating program to boost.
+      required: true
+      selector:
+        text:
+    temperature:
+      name: Temperature
+      description: The temperature to hold.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°"
+    minutes:
+      name: Duration
+      description: How long to hold this temperature, in minutes.
+      required: false
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+          unit_of_measurement: min
+
+heating_set_override:
+  name: Heating set override
+  description: Hold a temperature on a heating program indefinitely, or until a given time, overriding its schedule.
+  fields:
+    program_id:
+      name: Heating program
+      description: The heating program to override.
+      required: true
+      selector:
+        text:
+    temperature:
+      name: Temperature
+      description: The temperature to hold.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°"
+    until:
+      name: Until
+      description: Optional - revert back to the schedule automatically at this date/time. Leave empty to hold indefinitely.
+      required: false
+      selector:
+        datetime:
+
+heating_clear_override:
+  name: Heating clear override
+  description: Clear any active boost/hold override on a heating program, returning it to its schedule.
+  fields:
+    program_id:
+      name: Heating program
+      description: The heating program to clear the override on.
+      required: true
+      selector:
+        text:
