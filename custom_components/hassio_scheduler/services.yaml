@@ -1,0 +1,49 @@
+run_now:
+  name: Run now
+  description: Immediately run a schedule's actions, ignoring its configured time.
+  fields:
+    schedule_id:
+      name: Schedule
+      description: The schedule to run.
+      required: true
+      selector:
+        text:
+    timeslot_id:
+      name: Timeslot
+      description: Optional - only run a specific timeslot within the schedule.
+      required: false
+      selector:
+        text:
+
+enable:
+  name: Enable
+  description: Enable a schedule.
+  fields:
+    schedule_id:
+      name: Schedule
+      description: The schedule to enable.
+      required: true
+      selector:
+        text:
+
+disable:
+  name: Disable
+  description: Disable a schedule.
+  fields:
+    schedule_id:
+      name: Schedule
+      description: The schedule to disable.
+      required: true
+      selector:
+        text:
+
+remove_schedule:
+  name: Remove schedule
+  description: Permanently delete a schedule.
+  fields:
+    schedule_id:
+      name: Schedule
+      description: The schedule to remove.
+      required: true
+      selector:
+        text:

@@ -1,0 +1,13 @@
+{
+  "domain": "hassio_scheduler",
+  "name": "Scheduler",
+  "codeowners": ["@Milkman337"],
+  "config_flow": true,
+  "dependencies": ["http", "frontend", "websocket_api"],
+  "documentation": "https://github.com/Milkman337/hassio-scheduler",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/Milkman337/hassio-scheduler/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
